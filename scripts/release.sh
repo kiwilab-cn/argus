@@ -15,8 +15,18 @@ if ! grep -Eq '^GETLLM_API_KEY=.+$' "${ENV_FILE}"; then
   exit 1
 fi
 
-if ! grep -Eq '^FEISHU_WEBHOOK_URL=https://.+$' "${ENV_FILE}"; then
-  echo "FEISHU_WEBHOOK_URL is missing or is not HTTPS in .env" >&2
+if ! grep -Eq '^FEISHU_APP_ID=cli_.+$' "${ENV_FILE}"; then
+  echo "FEISHU_APP_ID is missing or invalid in .env" >&2
+  exit 1
+fi
+
+if ! grep -Eq '^FEISHU_APP_SECRET=.+$' "${ENV_FILE}"; then
+  echo "FEISHU_APP_SECRET is missing in .env" >&2
+  exit 1
+fi
+
+if ! grep -Eq '^FEISHU_CHAT_ID=oc_.+$' "${ENV_FILE}"; then
+  echo "FEISHU_CHAT_ID is missing or invalid in .env" >&2
   exit 1
 fi
 

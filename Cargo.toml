@@ -22,14 +22,11 @@ argus-notifier-feishu = { path = "src/notifier-feishu" }
 argus-plugin-getllm = { path = "src/plugin-getllm" }
 argus-runtime = { path = "src/runtime" }
 async-trait = "0.1.89"
-base64 = "0.22.1"
 clap = { version = "4.5.45", features = ["derive"] }
 dotenvy = "0.15.7"
-hmac = "0.12.1"
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
-sha2 = "0.10.9"
 thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"

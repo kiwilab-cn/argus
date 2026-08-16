@@ -23,8 +23,9 @@ pub struct Settings {
     pub image_quality: Option<String>,
     pub image_response_format: Option<String>,
     pub image_timeout: Duration,
-    pub feishu_webhook_url: Option<String>,
-    pub feishu_signing_secret: Option<String>,
+    pub feishu_app_id: Option<String>,
+    pub feishu_app_secret: Option<String>,
+    pub feishu_chat_id: Option<String>,
     pub feishu_timeout: Duration,
 }
 
@@ -61,8 +62,9 @@ impl Settings {
             image_quality: optional_or("GETLLM_IMAGE_QUALITY", Some("low")),
             image_response_format: optional_or("GETLLM_IMAGE_RESPONSE_FORMAT", None),
             image_timeout: duration("GETLLM_IMAGE_TIMEOUT_SECS", 180)?,
-            feishu_webhook_url: optional("FEISHU_WEBHOOK_URL"),
-            feishu_signing_secret: optional("FEISHU_SIGNING_SECRET"),
+            feishu_app_id: optional("FEISHU_APP_ID"),
+            feishu_app_secret: optional("FEISHU_APP_SECRET"),
+            feishu_chat_id: optional("FEISHU_CHAT_ID"),
             feishu_timeout: duration("FEISHU_TIMEOUT_SECS", 10)?,
         })
     }

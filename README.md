@@ -1,6 +1,6 @@
 # Argus
 
-Argus 是一个 Rust 编写的插件化可用性监控器。当前内置 GetLLM 文字、文生图探针和飞书群机器人告警；每个探针独立调度，后续可以继续增加其他监控插件。
+Argus 是一个 Rust 编写的插件化可用性监控器。当前内置 GetLLM 文字、文生图探针和飞书应用机器人告警；每个探针独立调度，后续可以继续增加其他监控插件。
 
 ## 行为
 
@@ -8,7 +8,7 @@ Argus 是一个 Rust 编写的插件化可用性监控器。当前内置 GetLLM 
 - 文生图探针先请求 `GET /v1/models`，确认 `gpt-image-2` 存在且具备图片输出能力，再请求 `POST /v1/images/generations`。默认只生成一张低质量图片，流式校验并丢弃响应内容，不保存图片。
 - 首次启动立即检查，此后按配置间隔执行；错过的周期会跳过，不会并发堆积。
 - 达到连续失败阈值后只发送一次告警；恢复达到阈值后发送一次恢复通知。飞书发送失败会在下一轮重试。
-- API Key、飞书 Webhook 和签名密钥只从环境变量读取，不会写入日志。
+- API Key、飞书 App Secret 和访问 Token 只从环境变量或飞书鉴权接口读取，不会写入日志。
 
 ## 配置
 
@@ -16,7 +16,9 @@ Argus 是一个 Rust 编写的插件化可用性监控器。当前内置 GetLLM 
 cp .env.example .env
 ```
 
-填写 `.env` 中的 `GETLLM_API_KEY`、`FEISHU_WEBHOOK_URL`，如果飞书机器人开启了签名校验，再填写 `FEISHU_SIGNING_SECRET`。
+填写 `.env` 中的 `GETLLM_API_KEY`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和目标群的 `FEISHU_CHAT_ID`。飞书应用需要开启机器人能力、申请 `im:message:send_as_bot` 权限、发布版本，并加入目标群。
+
+程序会使用 App ID/App Secret 获取并缓存 `tenant_access_token`，然后通过飞书发送消息 OpenAPI 向目标群主动告警。此场景不接收飞书事件，因此无需 Webhook URL、公网回调地址或长连接。
 
 默认文字探针每 1 分钟执行一次，文生图探针每 10 分钟执行一次：
 
@@ -41,7 +43,7 @@ cargo run -p argus-server
 
 ## Docker Compose 发布
 
-先补齐 `.env` 中的飞书 Webhook，然后运行：
+先补齐 `.env` 中的飞书应用凭证和目标群 ID，然后运行：
 
 ```bash
 ./scripts/release.sh
@@ -63,7 +65,7 @@ docker compose down
 src/core              领域类型，无异步依赖
 src/runtime           MonitorPlugin / Notifier 接口、调度与事件状态机
 src/plugin-getllm     GetLLM 文字及文生图插件
-src/notifier-feishu   飞书 Webhook 通知插件
+src/notifier-feishu   飞书应用机器人 OpenAPI 通知插件
 src/server            配置与组装入口
 ```
 

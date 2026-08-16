@@ -65,16 +65,24 @@ fn build_runner(settings: Settings, require_notifier: bool) -> Result<Runner> {
         failure_threshold: settings.failure_threshold,
         recovery_threshold: settings.recovery_threshold,
     });
-    if let Some(webhook_url) = settings.feishu_webhook_url.as_deref() {
-        let notifier = FeishuNotifier::new(
-            webhook_url,
-            settings.feishu_signing_secret,
-            settings.feishu_timeout,
-        )
-        .context("could not configure Feishu notifier")?;
-        runner.add_notifier(Arc::new(notifier));
-    } else if require_notifier {
-        bail!("FEISHU_WEBHOOK_URL is required for continuous monitoring");
+    match (
+        settings.feishu_app_id,
+        settings.feishu_app_secret,
+        settings.feishu_chat_id,
+    ) {
+        (Some(app_id), Some(app_secret), Some(chat_id)) => {
+            let notifier =
+                FeishuNotifier::new(app_id, app_secret, chat_id, settings.feishu_timeout)
+                    .context("could not configure Feishu notifier")?;
+            runner.add_notifier(Arc::new(notifier));
+        }
+        (None, None, None) if !require_notifier => {}
+        (None, None, None) => bail!(
+            "FEISHU_APP_ID, FEISHU_APP_SECRET and FEISHU_CHAT_ID are required for continuous monitoring"
+        ),
+        _ => {
+            bail!("FEISHU_APP_ID, FEISHU_APP_SECRET and FEISHU_CHAT_ID must be configured together")
+        }
     }
 
     if settings.text_enabled {
