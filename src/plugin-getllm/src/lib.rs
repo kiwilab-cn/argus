@@ -36,6 +36,7 @@ enum Probe {
 pub struct GetLlmMonitor {
     name: String,
     endpoint: Url,
+    models_endpoint: Url,
     api_key: String,
     route: Option<String>,
     interval: Duration,
@@ -112,10 +113,12 @@ impl GetLlmMonitor {
         normalized.push('/');
         let base = Url::parse(&normalized)?;
         let endpoint = base.join(path)?;
+        let models_endpoint = base.join("models")?;
         let client = Client::builder().timeout(timeout).build()?;
         Ok(Self {
             name: name.to_owned(),
             endpoint,
+            models_endpoint,
             api_key,
             route: route.filter(|value| !value.trim().is_empty()),
             interval: interval.max(Duration::from_secs(1)),
@@ -181,6 +184,13 @@ impl GetLlmMonitor {
     }
 
     async fn run_image(&self, config: &ImageProbeConfig, started: Instant) -> CheckOutcome {
+        if let Err(outcome) = self
+            .ensure_image_model_available(&config.model, started)
+            .await
+        {
+            return outcome;
+        }
+
         let mut payload = json!({
             "model": config.model,
             "prompt": config.prompt,
@@ -268,6 +278,82 @@ impl GetLlmMonitor {
             request = request.header("X-GetLLM-Route", route);
         }
         request.send().await
+    }
+
+    async fn ensure_image_model_available(
+        &self,
+        model: &str,
+        started: Instant,
+    ) -> Result<(), CheckOutcome> {
+        let response = match self
+            .client
+            .get(self.models_endpoint.clone())
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                return Err(CheckOutcome::unhealthy(
+                    format!("model discovery request failed: {error}"),
+                    started.elapsed(),
+                ));
+            }
+        };
+        let status = response.status();
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error) => {
+                return Err(CheckOutcome::unhealthy(
+                    format!("could not read model discovery response: {error}"),
+                    started.elapsed(),
+                ));
+            }
+        };
+        if !status.is_success() {
+            let outcome = http_failure(status, &body, started.elapsed());
+            return Err(CheckOutcome::unhealthy(
+                format!("model discovery failed: {}", outcome.summary),
+                outcome.latency,
+            ));
+        }
+
+        let value = serde_json::from_slice::<Value>(&body).map_err(|error| {
+            CheckOutcome::unhealthy(
+                format!("invalid model discovery JSON: {error}"),
+                started.elapsed(),
+            )
+        })?;
+        let models = value.get("data").and_then(Value::as_array).ok_or_else(|| {
+            CheckOutcome::unhealthy(
+                "model discovery response contained no data array",
+                started.elapsed(),
+            )
+        })?;
+        let Some(discovered) = models
+            .iter()
+            .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(model))
+        else {
+            return Err(CheckOutcome::unhealthy(
+                format!("image model {model} is not advertised by GET /v1/models"),
+                started.elapsed(),
+            ));
+        };
+
+        if let Some(output_modalities) = discovered
+            .pointer("/hermes/output_modalities")
+            .and_then(Value::as_array)
+            && !output_modalities
+                .iter()
+                .any(|modality| modality.as_str() == Some("image"))
+        {
+            return Err(CheckOutcome::unhealthy(
+                format!("model {model} is advertised without image output capability"),
+                started.elapsed(),
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -409,10 +495,10 @@ mod tests {
 
     #[tokio::test]
     async fn text_probe_validates_an_openai_completion() -> Result<(), Box<dyn Error>> {
-        let (base_url, request, server) = one_shot_server(
+        let (base_url, requests, server) = mock_server(vec![(
             "200 OK",
             r#"{"choices":[{"message":{"role":"assistant","content":"pong"}}]}"#,
-        )
+        )])
         .await?;
         let monitor = GetLlmMonitor::text(
             &base_url,
@@ -428,8 +514,9 @@ mod tests {
         )?;
 
         let outcome = monitor.check().await;
-        let request = request.await?;
+        let requests = requests.await?;
         server.await??;
+        let request = request_at(&requests, 0)?;
 
         assert_eq!(outcome.health, Health::Healthy);
         assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
@@ -449,10 +536,16 @@ mod tests {
 
     #[tokio::test]
     async fn image_probe_requires_an_image_field() -> Result<(), Box<dyn Error>> {
-        let (base_url, request, server) = one_shot_server(
-            "200 OK",
-            r#"{"created":1,"data":[{"url":"https://example.test/image.png"}]}"#,
-        )
+        let (base_url, requests, server) = mock_server(vec![
+            (
+                "200 OK",
+                r#"{"object":"list","data":[{"id":"test-image","hermes":{"output_modalities":["image"]}}]}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"created":1,"data":[{"url":"https://example.test/image.png"}]}"#,
+            ),
+        ])
         .await?;
         let monitor = GetLlmMonitor::image(
             &base_url,
@@ -470,22 +563,55 @@ mod tests {
         )?;
 
         let outcome = monitor.check().await;
-        let request = request.await?;
+        let requests = requests.await?;
         server.await??;
+        let discovery_request = request_at(&requests, 0)?;
+        let image_request = request_at(&requests, 1)?;
 
         assert_eq!(outcome.health, Health::Healthy);
-        assert!(request.starts_with("POST /v1/images/generations HTTP/1.1"));
-        assert!(request.contains("\"quality\":\"low\""));
-        assert!(request.contains("\"response_format\":\"url\""));
+        assert!(discovery_request.starts_with("GET /v1/models HTTP/1.1"));
+        assert!(image_request.starts_with("POST /v1/images/generations HTTP/1.1"));
+        assert!(image_request.contains("\"quality\":\"low\""));
+        assert!(image_request.contains("\"response_format\":\"url\""));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn image_probe_rejects_an_unadvertised_model() -> Result<(), Box<dyn Error>> {
+        let (base_url, requests, server) =
+            mock_server(vec![("200 OK", r#"{"object":"list","data":[]}"#)]).await?;
+        let monitor = GetLlmMonitor::image(
+            &base_url,
+            "test-key",
+            None,
+            Duration::from_secs(600),
+            Duration::from_secs(2),
+            ImageProbeConfig {
+                model: "gpt-image-2".to_owned(),
+                prompt: "dot".to_owned(),
+                size: "1024x1024".to_owned(),
+                quality: Some("low".to_owned()),
+                response_format: None,
+            },
+        )?;
+
+        let outcome = monitor.check().await;
+        let requests = requests.await?;
+        server.await??;
+
+        assert_eq!(outcome.health, Health::Unhealthy);
+        assert!(outcome.summary.contains("gpt-image-2"));
+        assert!(outcome.summary.contains("not advertised"));
+        assert_eq!(requests.len(), 1);
         Ok(())
     }
 
     #[tokio::test]
     async fn non_success_status_is_unhealthy() -> Result<(), Box<dyn Error>> {
-        let (base_url, request, server) = one_shot_server(
+        let (base_url, requests, server) = mock_server(vec![(
             "503 Service Unavailable",
             r#"{"error":{"message":"no healthy upstream"}}"#,
-        )
+        )])
         .await?;
         let monitor = GetLlmMonitor::text(
             &base_url,
@@ -501,7 +627,7 @@ mod tests {
         )?;
 
         let outcome = monitor.check().await;
-        let _ = request.await?;
+        let _ = requests.await?;
         server.await??;
 
         assert_eq!(outcome.health, Health::Unhealthy);
@@ -510,41 +636,53 @@ mod tests {
         Ok(())
     }
 
-    async fn one_shot_server(
-        status: &'static str,
-        body: &'static str,
+    async fn mock_server(
+        responses: Vec<(&'static str, &'static str)>,
     ) -> io::Result<(
         String,
-        oneshot::Receiver<String>,
+        oneshot::Receiver<Vec<String>>,
         JoinHandle<io::Result<()>>,
     )> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let (request_tx, request_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await?;
-            let mut request = Vec::new();
-            loop {
-                let mut chunk = [0_u8; 4096];
-                let read = stream.read(&mut chunk).await?;
-                if read == 0 {
-                    break;
+            let mut requests = Vec::with_capacity(responses.len());
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().await?;
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0_u8; 4096];
+                    let read = stream.read(&mut chunk).await?;
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    if request_is_complete(&request) {
+                        break;
+                    }
                 }
-                request.extend_from_slice(&chunk[..read]);
-                if request_is_complete(&request) {
-                    break;
-                }
+                requests.push(String::from_utf8_lossy(&request).into_owned());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await?;
+                stream.shutdown().await?;
             }
-            let request_text = String::from_utf8_lossy(&request).into_owned();
-            let _ = request_tx.send(request_text);
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(response.as_bytes()).await?;
-            stream.shutdown().await
+            let _ = request_tx.send(requests);
+            Ok(())
         });
         Ok((format!("http://{address}/v1"), request_rx, server))
+    }
+
+    fn request_at(requests: &[String], index: usize) -> io::Result<&str> {
+        requests.get(index).map(String::as_str).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("mock server received no request at index {index}"),
+            )
+        })
     }
 
     fn request_is_complete(request: &[u8]) -> bool {

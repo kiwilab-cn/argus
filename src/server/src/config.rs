@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 pub struct Settings {
-    pub interval: Duration,
     pub failure_threshold: u32,
     pub recovery_threshold: u32,
     pub getllm_base_url: String,
@@ -31,7 +30,7 @@ pub struct Settings {
 
 impl Settings {
     pub fn from_env() -> Result<Self> {
-        let interval = duration("ARGUS_INTERVAL_SECS", 600)?;
+        let default_interval = optional_duration("ARGUS_INTERVAL_SECS")?;
         let text_enabled = boolean("GETLLM_TEXT_ENABLED", true)?;
         let image_enabled = boolean("GETLLM_IMAGE_ENABLED", true)?;
         if !text_enabled && !image_enabled {
@@ -39,7 +38,6 @@ impl Settings {
         }
 
         Ok(Self {
-            interval,
             failure_threshold: positive_u32("ARGUS_FAILURE_THRESHOLD", 1)?,
             recovery_threshold: positive_u32("ARGUS_RECOVERY_THRESHOLD", 1)?,
             getllm_base_url: value("GETLLM_BASE_URL", "https://www.getllm.ai/v1"),
@@ -47,14 +45,18 @@ impl Settings {
             getllm_route: optional("GETLLM_ROUTE"),
             request_timeout: duration("GETLLM_REQUEST_TIMEOUT_SECS", 30)?,
             text_enabled,
-            text_interval: optional_duration("GETLLM_TEXT_INTERVAL_SECS")?.unwrap_or(interval),
+            text_interval: optional_duration("GETLLM_TEXT_INTERVAL_SECS")?
+                .or(default_interval)
+                .unwrap_or(Duration::from_secs(60)),
             text_model: value("GETLLM_TEXT_MODEL", "gpt-4o-mini"),
             text_prompt: value("GETLLM_TEXT_PROMPT", "ping"),
             text_max_tokens: positive_u32("GETLLM_TEXT_MAX_TOKENS", 1)?,
             image_enabled,
-            image_interval: optional_duration("GETLLM_IMAGE_INTERVAL_SECS")?.unwrap_or(interval),
-            image_model: value("GETLLM_IMAGE_MODEL", "gpt-image-1"),
-            image_prompt: value("GETLLM_IMAGE_PROMPT", "blue dot"),
+            image_interval: optional_duration("GETLLM_IMAGE_INTERVAL_SECS")?
+                .or(default_interval)
+                .unwrap_or(Duration::from_secs(600)),
+            image_model: value("GETLLM_IMAGE_MODEL", "gpt-image-2"),
+            image_prompt: value("GETLLM_IMAGE_PROMPT", "dot"),
             image_size: value("GETLLM_IMAGE_SIZE", "1024x1024"),
             image_quality: optional_or("GETLLM_IMAGE_QUALITY", Some("low")),
             image_response_format: optional_or("GETLLM_IMAGE_RESPONSE_FORMAT", None),

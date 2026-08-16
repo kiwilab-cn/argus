@@ -5,7 +5,7 @@ Argus 是一个 Rust 编写的插件化可用性监控器。当前内置 GetLLM 
 ## 行为
 
 - 文字探针请求 OpenAI 兼容的 `POST /v1/chat/completions`，默认提示词为 `ping`，输出上限为 1 token。
-- 文生图探针请求 `POST /v1/images/generations`，默认只生成一张低质量图片，流式校验并丢弃响应内容，不保存图片。
+- 文生图探针先请求 `GET /v1/models`，确认 `gpt-image-2` 存在且具备图片输出能力，再请求 `POST /v1/images/generations`。默认只生成一张低质量图片，流式校验并丢弃响应内容，不保存图片。
 - 首次启动立即检查，此后按配置间隔执行；错过的周期会跳过，不会并发堆积。
 - 达到连续失败阈值后只发送一次告警；恢复达到阈值后发送一次恢复通知。飞书发送失败会在下一轮重试。
 - API Key、飞书 Webhook 和签名密钥只从环境变量读取，不会写入日志。
@@ -18,24 +18,16 @@ cp .env.example .env
 
 填写 `.env` 中的 `GETLLM_API_KEY`、`FEISHU_WEBHOOK_URL`，如果飞书机器人开启了签名校验，再填写 `FEISHU_SIGNING_SECRET`。
 
-全局频率由秒数配置，例如：
-
-```dotenv
-# 1 分钟
-ARGUS_INTERVAL_SECS=60
-
-# 10 分钟
-ARGUS_INTERVAL_SECS=600
-```
-
-也可以分别覆盖：
+默认文字探针每 1 分钟执行一次，文生图探针每 10 分钟执行一次：
 
 ```dotenv
 GETLLM_TEXT_INTERVAL_SECS=60
 GETLLM_IMAGE_INTERVAL_SECS=600
 ```
 
-文生图实际会产生模型费用，建议使用比文字探针更长的周期。可通过 `GETLLM_TEXT_ENABLED` 或 `GETLLM_IMAGE_ENABLED` 单独停用探针。
+如需所有探针使用相同频率，可设置兼容配置 `ARGUS_INTERVAL_SECS`；单独设置的探针频率优先级更高。
+
+`GET /v1/models` 不产生模型 Token；只有模型存在且能力匹配时才会发起付费的生图请求。可通过 `GETLLM_TEXT_ENABLED` 或 `GETLLM_IMAGE_ENABLED` 单独停用探针。
 
 ## 本地运行
 

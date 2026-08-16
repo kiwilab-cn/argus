@@ -59,6 +59,8 @@ async fn main() -> Result<()> {
 }
 
 fn build_runner(settings: Settings, require_notifier: bool) -> Result<Runner> {
+    let text_interval_secs = settings.text_interval.as_secs();
+    let image_interval_secs = settings.image_interval.as_secs();
     let mut runner = Runner::new(AlertPolicy {
         failure_threshold: settings.failure_threshold,
         recovery_threshold: settings.recovery_threshold,
@@ -113,8 +115,7 @@ fn build_runner(settings: Settings, require_notifier: bool) -> Result<Runner> {
 
     info!(
         monitors = runner.monitor_count(),
-        default_interval_secs = settings.interval.as_secs(),
-        "Argus configured"
+        text_interval_secs, image_interval_secs, "Argus configured"
     );
     Ok(runner)
 }
