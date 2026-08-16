@@ -1,0 +1,24 @@
+services:
+  argus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: argus:local
+    container_name: argus
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/argus", "--check-config"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
